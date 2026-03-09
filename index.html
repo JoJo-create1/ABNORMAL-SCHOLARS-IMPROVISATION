@@ -387,6 +387,15 @@
       font-size: 0.8rem;
     }
 
+    .download-link {
+      display: inline-block;
+      margin-top: 0.65rem;
+      color: #bde7ff;
+      font-size: 0.86rem;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
     @keyframes rise {
       from {
         opacity: 0;
@@ -484,7 +493,7 @@
       </div>
 
       <div class="video-container">
-        <video id="video" autoplay muted playsinline></video>
+        <video id="video" autoplay muted playsinline webkit-playsinline></video>
         <div class="panel prompt" id="prompt">Press ENABLE CAMERA, then START CHALLENGE.</div>
         <div class="panel round" id="round">Round 0</div>
         <div class="panel timer" id="timer">--</div>
@@ -501,7 +510,8 @@
         <button id="startBtn" type="button" disabled>Start Challenge</button>
         <button id="endBtn" type="button" style="display:none;">End Challenge</button>
       </div>
-      <p class="hint">Camera is off by default. 3 rounds - auto-downloads your recording when done.</p>
+      <p class="hint">Camera is off by default. If camera fails on iPhone, open this link directly in Safari.</p>
+      <a id="downloadLink" class="download-link" href="#" hidden>Download recording</a>
     </section>
   </main>
 
@@ -538,6 +548,12 @@
     const SPEAK_TIME = 30;
     const TOTAL_ROUNDS = 3;
     const BRAND_TAG = "ABNORMAL SCHOLARS";
+    const IOS_REGEX = /iPad|iPhone|iPod/;
+    const IS_IOS = IOS_REGEX.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    const PREFERS_REDUCED_MOTION = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const SHOULD_USE_LIGHTWEIGHT_RECORDING = IS_IOS || PREFERS_REDUCED_MOTION;
+    const OVERLAY_RENDER_FPS = SHOULD_USE_LIGHTWEIGHT_RECORDING ? 10 : 24;
+    const COMPOSITE_CAPTURE_FPS = SHOULD_USE_LIGHTWEIGHT_RECORDING ? 12 : 24;
 
     let round = 0;
     let timerInterval;
@@ -553,6 +569,9 @@
     let challengeActive = false;
     let isStoppingRecorder = false;
     let chunks = [];
+    let recorderMimeType = "";
+    let overlayLastDrawTime = 0;
+    let downloadUrl = "";
 
     const video = document.getElementById("video");
     const prompt = document.getElementById("prompt");
@@ -568,6 +587,7 @@
     const cameraStatus = document.getElementById("cameraStatus");
     const videoContainer = document.querySelector(".video-container");
     const brandTag = document.getElementById("brandTag");
+    const downloadLink = document.getElementById("downloadLink");
 
     jumpBtn.addEventListener("click", () => {
       slides.classList.add("active");
@@ -579,6 +599,29 @@
         return true;
       }
       return location.hostname === "localhost" || location.hostname === "127.0.0.1";
+    }
+
+    function isLikelyInAppBrowser() {
+      const ua = navigator.userAgent || "";
+      return /(FBAN|FBAV|Instagram|Line|wv|IAB|Twitter)/i.test(ua);
+    }
+
+    function getCameraConstraints() {
+      return {
+        facingMode: "user",
+        width: { ideal: SHOULD_USE_LIGHTWEIGHT_RECORDING ? 640 : 1280 },
+        height: { ideal: SHOULD_USE_LIGHTWEIGHT_RECORDING ? 480 : 720 },
+        frameRate: { ideal: SHOULD_USE_LIGHTWEIGHT_RECORDING ? 24 : 30, max: 30 }
+      };
+    }
+
+    function canUseCanvasCapture() {
+      if (SHOULD_USE_LIGHTWEIGHT_RECORDING) {
+        return false;
+      }
+      return typeof HTMLCanvasElement !== "undefined"
+        && HTMLCanvasElement.prototype
+        && typeof HTMLCanvasElement.prototype.captureStream === "function";
     }
 
     function setOverlayMode(mode) {
@@ -622,23 +665,29 @@
 
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: "user",
-            width: { ideal: 1280 },
-            height: { ideal: 720 }
-          },
+          video: getCameraConstraints(),
           audio: {
             echoCancellation: true,
-            noiseSuppression: true
+            noiseSuppression: true,
+            autoGainControl: true
           }
         });
         video.srcObject = stream;
+        video.play().catch(() => {});
         cameraStatus.textContent = "Camera and mic ready.";
         startBtn.disabled = false;
         enableCamBtn.textContent = "Camera Enabled";
         return true;
       } catch (error) {
-        cameraStatus.textContent = "Permission denied or camera unavailable.";
+        if (error && error.name === "NotAllowedError") {
+          cameraStatus.textContent = "Permission denied. On iPhone, open this link in Safari and allow camera + mic.";
+        } else if (error && error.name === "NotFoundError") {
+          cameraStatus.textContent = "Camera or microphone not found on this device.";
+        } else if (isLikelyInAppBrowser()) {
+          cameraStatus.textContent = "In-app browser blocked camera. Open the link in Safari or Chrome.";
+        } else {
+          cameraStatus.textContent = "Permission denied or camera unavailable.";
+        }
         startBtn.disabled = true;
         return false;
       }
@@ -655,6 +704,48 @@
       enableCamBtn.textContent = "Enable Camera";
     }
 
+    function clearDownloadLink() {
+      if (downloadUrl) {
+        URL.revokeObjectURL(downloadUrl);
+        downloadUrl = "";
+      }
+      if (downloadLink) {
+        downloadLink.hidden = true;
+        downloadLink.removeAttribute("href");
+        downloadLink.removeAttribute("download");
+      }
+    }
+
+    function getRecordingOutputInfo() {
+      const chunkType = chunks.length > 0 ? chunks[0].type : "";
+      const mimeType = recorderMimeType || chunkType || "video/webm";
+      const normalizedType = mimeType.toLowerCase();
+      let extension = "webm";
+
+      if (normalizedType.includes("mp4")) {
+        extension = "mp4";
+      } else if (normalizedType.includes("quicktime") || normalizedType.includes("mov")) {
+        extension = "mov";
+      }
+
+      return { mimeType, extension };
+    }
+
+    function exposeDownloadLink(blob, extension) {
+      clearDownloadLink();
+      downloadUrl = URL.createObjectURL(blob);
+      const filename = "abnormal-improv." + extension;
+
+      if (!downloadLink) {
+        return;
+      }
+
+      downloadLink.href = downloadUrl;
+      downloadLink.download = filename;
+      downloadLink.hidden = false;
+      downloadLink.textContent = "Download recording (" + extension.toUpperCase() + ")";
+    }
+
     function randomPrompt() {
       return prompts[Math.floor(Math.random() * prompts.length)];
     }
@@ -667,8 +758,8 @@
     }
 
     function getComposerSize() {
-      const width = video.videoWidth || 1280;
-      const height = video.videoHeight || 720;
+      const width = video.videoWidth || (SHOULD_USE_LIGHTWEIGHT_RECORDING ? 640 : 1280);
+      const height = video.videoHeight || (SHOULD_USE_LIGHTWEIGHT_RECORDING ? 480 : 720);
       return { width, height };
     }
 
@@ -896,12 +987,18 @@
         cancelAnimationFrame(overlayRafId);
       }
 
-      const loop = () => {
-        drawOverlayFrame();
+      overlayLastDrawTime = 0;
+      const minFrameGap = 1000 / OVERLAY_RENDER_FPS;
+
+      const loop = (timestamp) => {
+        if (!overlayLastDrawTime || (timestamp - overlayLastDrawTime) >= minFrameGap) {
+          drawOverlayFrame();
+          overlayLastDrawTime = timestamp;
+        }
         overlayRafId = requestAnimationFrame(loop);
       };
 
-      loop();
+      overlayRafId = requestAnimationFrame(loop);
     }
 
     function stopOverlayRenderLoop() {
@@ -909,10 +1006,19 @@
         cancelAnimationFrame(overlayRafId);
         overlayRafId = null;
       }
+      overlayLastDrawTime = 0;
     }
 
     function createRecorderStream() {
       recorderOwnsTracks = false;
+      if (!stream) {
+        return null;
+      }
+
+      if (!canUseCanvasCapture()) {
+        return stream;
+      }
+
       const { width, height } = getComposerSize();
 
       if (!overlayCanvas) {
@@ -927,8 +1033,18 @@
         return stream;
       }
 
+      let canvasStream;
+      try {
+        canvasStream = overlayCanvas.captureStream(COMPOSITE_CAPTURE_FPS);
+      } catch (error) {
+        return stream;
+      }
+
+      if (!canvasStream || canvasStream.getVideoTracks().length === 0) {
+        return stream;
+      }
+
       startOverlayRenderLoop();
-      const canvasStream = overlayCanvas.captureStream(30);
       const composed = new MediaStream();
 
       canvasStream.getVideoTracks().forEach((track) => composed.addTrack(track));
@@ -938,21 +1054,37 @@
     }
 
     function getRecorderOptions() {
-      if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) {
+      if (!window.MediaRecorder) {
         return {};
       }
 
-      if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")) {
-        return { mimeType: "video/webm;codecs=vp9,opus" };
+      if (!MediaRecorder.isTypeSupported) {
+        return {};
       }
-      if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")) {
-        return { mimeType: "video/webm;codecs=vp8,opus" };
-      }
-      if (MediaRecorder.isTypeSupported("video/webm")) {
-        return { mimeType: "video/webm" };
+
+      const candidates = [
+        "video/mp4;codecs=h264,aac",
+        "video/mp4",
+        "video/webm;codecs=vp9,opus",
+        "video/webm;codecs=vp8,opus",
+        "video/webm"
+      ];
+
+      for (const candidate of candidates) {
+        if (MediaRecorder.isTypeSupported(candidate)) {
+          return { mimeType: candidate };
+        }
       }
 
       return {};
+    }
+
+    function createMediaRecorder(sourceStream) {
+      const options = getRecorderOptions();
+      if (options.mimeType) {
+        return new MediaRecorder(sourceStream, options);
+      }
+      return new MediaRecorder(sourceStream);
     }
 
     function startThinkPhase() {
@@ -1051,12 +1183,18 @@
       phaseToken += 1;
       round = 0;
       chunks = [];
+      recorderMimeType = "";
+      clearDownloadLink();
       startBtn.style.display = "none";
       endBtn.style.display = "inline-block";
 
       recorderStream = createRecorderStream();
       try {
-        recorder = new MediaRecorder(recorderStream, getRecorderOptions());
+        if (!recorderStream) {
+          throw new Error("No active media stream.");
+        }
+        recorder = createMediaRecorder(recorderStream);
+        recorderMimeType = recorder.mimeType || "";
       } catch (error) {
         challengeActive = false;
         isStoppingRecorder = false;
@@ -1076,7 +1214,7 @@
       };
 
       recorder.onstop = handleRecorderStop;
-      recorder.start();
+      recorder.start(1000);
       rec.style.display = "block";
       focusPromptArea();
       nextRound();
@@ -1084,7 +1222,11 @@
 
     function startRecorderAgain() {
       try {
-        recorder = new MediaRecorder(recorderStream, getRecorderOptions());
+        if (!recorderStream) {
+          throw new Error("No recorder stream.");
+        }
+        recorder = createMediaRecorder(recorderStream);
+        recorderMimeType = recorder.mimeType || recorderMimeType;
       } catch (error) {
         cameraStatus.textContent = "Recorder interrupted and could not restart.";
         endChallenge();
@@ -1097,7 +1239,7 @@
         }
       };
       recorder.onstop = handleRecorderStop;
-      recorder.start();
+      recorder.start(1000);
     }
 
     function handleRecorderStop() {
@@ -1155,15 +1297,15 @@
       timer.textContent = "--";
 
       if (chunks.length > 0) {
-        const blob = new Blob(chunks, { type: "video/webm" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "abnormal-improv.webm";
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
+        const { mimeType, extension } = getRecordingOutputInfo();
+        const blob = new Blob(chunks, { type: mimeType });
+        exposeDownloadLink(blob, extension);
+
+        if (!IS_IOS && downloadLink) {
+          downloadLink.click();
+        } else if (downloadLink) {
+          cameraStatus.textContent = "Recording ready. Tap the download link below to save it.";
+        }
       }
 
       resetUIAfterChallenge();
@@ -1220,16 +1362,19 @@
       stopOverlayRenderLoop();
       stopRecorderStreamTracks();
       stopLivePreviewStream();
+      clearDownloadLink();
     });
 
     if (!isSecureEnvironment()) {
-      cameraStatus.textContent = "Use HTTPS (or localhost) before enabling camera.";
+      cameraStatus.textContent = "Camera needs HTTPS. If opened from a chat app, tap the menu and open in Safari/Chrome.";
       enableCamBtn.disabled = true;
       startBtn.disabled = true;
     } else if (window.self !== window.top) {
       cameraStatus.textContent = "Camera disabled inside embedded frame.";
       enableCamBtn.disabled = true;
       startBtn.disabled = true;
+    } else if (isLikelyInAppBrowser()) {
+      cameraStatus.textContent = "Tip: if camera fails here, open this link directly in Safari or Chrome.";
     }
   </script>
 </body>
