@@ -1323,16 +1323,8 @@
         }
       }
 
-      recorder.ondataavailable = (event) => {
-        if (event.data && event.data.size > 0) {
-          chunks.push(event.data);
-        }
-      };
-
-      recorder.onstop = handleRecorderStop;
-      try {
-        recorder.start(1000);
-      } catch (error) {
+      attachRecorderHandlers();
+      if (!startRecorderWithCodecFallback()) {
         cameraStatus.textContent = "Recorder failed to start on this device.";
         endChallenge();
         return;
@@ -1371,15 +1363,8 @@
         }
       }
 
-      recorder.ondataavailable = (event) => {
-        if (event.data && event.data.size > 0) {
-          chunks.push(event.data);
-        }
-      };
-      recorder.onstop = handleRecorderStop;
-      try {
-        recorder.start(1000);
-      } catch (error) {
+      attachRecorderHandlers();
+      if (!startRecorderWithCodecFallback()) {
         cameraStatus.textContent = "Recorder interrupted and could not restart.";
         endChallenge();
         return;
@@ -1447,6 +1432,8 @@
 
         if (!IS_IOS && !IS_ANDROID && downloadLink) {
           downloadLink.click();
+        } else if (IS_ANDROID && extension !== "mp4") {
+          cameraStatus.textContent = "Saved as WEBM. If WhatsApp rejects it, send as document or use latest Chrome.";
         } else if (downloadLink) {
           cameraStatus.textContent = "Recording ready. Tap the download link below to save it.";
         }
