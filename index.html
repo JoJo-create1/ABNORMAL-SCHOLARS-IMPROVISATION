@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; media-src 'self' blob:; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Permissions-Policy" content="camera=(self), microphone=(self)">
   <title>Abnormal Public Speaking Improvisation</title>
   <style>
     @import url("https://fonts.googleapis.com/css2?family=Archivo+Black&family=Manrope:wght@400;600;700;800&display=swap");
@@ -357,9 +359,21 @@
       background: linear-gradient(120deg, var(--accent), var(--accent-2));
     }
 
+    #enableCamBtn {
+      color: #dce9ff;
+      background: linear-gradient(120deg, #1d2f54, #2f4e7f);
+    }
+
     #endBtn {
       color: #ffe1e7;
       background: linear-gradient(120deg, #b51d43, #ff4e6d);
+    }
+
+    .controls button:disabled {
+      cursor: not-allowed;
+      filter: grayscale(0.2) brightness(0.7);
+      transform: none;
+      opacity: 0.72;
     }
 
     .controls button:hover {
@@ -466,12 +480,12 @@
     <section class="challenge" id="challenge">
       <div class="challenge-header">
         <h2>Improv Arena</h2>
-        <p class="camera-status" id="cameraStatus">Checking camera access...</p>
+        <p class="camera-status" id="cameraStatus">Camera is off. Click Enable Camera.</p>
       </div>
 
       <div class="video-container">
         <video id="video" autoplay muted playsinline></video>
-        <div class="panel prompt" id="prompt">Press START CHALLENGE to begin.</div>
+        <div class="panel prompt" id="prompt">Press ENABLE CAMERA, then START CHALLENGE.</div>
         <div class="panel round" id="round">Round 0</div>
         <div class="panel timer" id="timer">--</div>
         <div class="panel brand-tag" id="brandTag">ABNORMAL SCHOLARS</div>
@@ -483,40 +497,41 @@
       </div>
 
       <div class="controls">
-        <button id="startBtn" type="button">Start Challenge</button>
+        <button id="enableCamBtn" type="button">Enable Camera</button>
+        <button id="startBtn" type="button" disabled>Start Challenge</button>
         <button id="endBtn" type="button" style="display:none;">End Challenge</button>
       </div>
-      <p class="hint">3 rounds - auto-downloads your recording when done</p>
+      <p class="hint">Camera is off by default. 3 rounds - auto-downloads your recording when done.</p>
     </section>
   </main>
 
   <script>
     const prompts = [
-      "Explain why your childhood haircut is a credible leadership strategy.",
-      "Defend the idea that elevators are emotional support boxes.",
-      "Pitch a startup that rents confidence by the minute.",
-      "Argue that your left shoe deserves a TED Talk.",
-      "Convince us your awkward silence is premium communication.",
-      "Explain why your worst typo should be framed in a museum.",
-      "Defend the claim that yawning is a networking tactic.",
-      "Sell the audience a course on professional overthinking.",
-      "Argue that forgetting names is an advanced memory technique.",
-      "Prove your procrastination calendar is a sacred artifact.",
-      "Explain why your most embarrassing moment increased national GDP.",
-      "Convince everyone that bad dancing should be a boardroom skill.",
-      "Defend eating cereal with a whisk as mental training.",
-      "Argue that your panic face is your authentic brand identity.",
-      "Explain why getting rejected builds elite public charisma.",
-      "Pitch a law that requires applause after every awkward pause.",
-      "Convince us that awkward eye contact boosts strategic vision.",
-      "Argue your last voice crack was intentional dramatic timing.",
-      "Defend why mumbling should count as poetic suspense.",
-      "Explain why your social anxiety could run a small kingdom.",
-      "Convince the room that stage fright is premium adrenaline coaching.",
-      "Argue that wearing mismatched socks improves rhetorical precision.",
-      "Sell the audience the concept of reverse confidence: fake fear first.",
-      "Explain why your forgotten lines were actually avant-garde storytelling.",
-      "Defend that embarrassing yourself publicly is the fastest growth plan."
+      "Explain why floor tiles should be made of bubbles, not tiles, and why this will improve family meetings.",
+      "Say why humans should stop wearing shoes and start wearing tiny pillows on their feet in public.",
+      "Convince us rain is just the sky dropping soup and we need bigger spoons, not umbrellas.",
+      "Defend the idea that traffic lights should be replaced with dance moves from the nearest pedestrian.",
+      "Explain why homework should be submitted to plants, because plants are better listeners than teachers.",
+      "Argue that elevators are shy and only move when people sing softly to the buttons.",
+      "Convince everyone your fridge gives life advice at 2 AM and deserves a weekly salary.",
+      "Say why birthday cakes should be square so they can fit in office spreadsheets.",
+      "Defend a law that every speech must include one random chicken sound for concentration.",
+      "Explain why Mondays should be canceled and replaced with pre-Tuesday warm-up day.",
+      "Argue that socks should be worn on hands during important interviews to show confidence.",
+      "Convince the audience pencils are retired spies and erasers are their memory doctors.",
+      "Say why mirrors are too honest and should blur your face when you feel dramatic.",
+      "Explain why alarms should ask polite questions instead of shouting at sleeping citizens.",
+      "Defend the statement that cereal tastes better when eaten with a tiny shovel.",
+      "Argue that handshakes are outdated and people should greet with synchronized eyebrow lifts.",
+      "Convince us that your backpack has emotional intelligence and can detect fake deadlines.",
+      "Say why trees should be given names and invited to neighborhood strategy meetings.",
+      "Explain why school bells should be replaced by someone whispering 'good luck' in the hallway.",
+      "Defend that overthinking is cardio for the brain and should count as exercise.",
+      "Argue that your shadow is your unpaid intern and deserves lunch breaks.",
+      "Convince everyone that awkward silence is premium silence and should be sold in jars.",
+      "Say why public speaking should sometimes happen while holding a spoon for moral support.",
+      "Explain why spelling mistakes are brave and should get participation trophies.",
+      "Defend a new rule that every serious meeting starts with one nonsense sentence."
     ];
 
     const THINK_TIME = 10;
@@ -542,6 +557,7 @@
     const timer = document.getElementById("timer");
     const phase = document.getElementById("phase");
     const rec = document.getElementById("rec");
+    const enableCamBtn = document.getElementById("enableCamBtn");
     const startBtn = document.getElementById("startBtn");
     const endBtn = document.getElementById("endBtn");
     const jumpBtn = document.getElementById("jumpBtn");
@@ -555,6 +571,13 @@
       slides.scrollIntoView({ behavior: "smooth", block: "start" });
     });
 
+    function isSecureEnvironment() {
+      if (window.isSecureContext) {
+        return true;
+      }
+      return location.hostname === "localhost" || location.hostname === "127.0.0.1";
+    }
+
     function setOverlayMode(mode) {
       overlayMode = mode;
       if (!videoContainer) {
@@ -567,24 +590,66 @@
       }
     }
 
-    async function initCamera() {
+    async function requestCameraAccess() {
+      if (window.self !== window.top) {
+        cameraStatus.textContent = "Camera disabled inside embedded frame.";
+        startBtn.disabled = true;
+        enableCamBtn.disabled = true;
+        return false;
+      }
+
+      if (!isSecureEnvironment()) {
+        cameraStatus.textContent = "Use HTTPS (or localhost) before enabling camera.";
+        startBtn.disabled = true;
+        return false;
+      }
+
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         cameraStatus.textContent = "Camera API is not supported in this browser.";
         startBtn.disabled = true;
-        return;
+        return false;
+      }
+
+      if (stream && stream.active) {
+        cameraStatus.textContent = "Camera and mic ready.";
+        startBtn.disabled = false;
+        enableCamBtn.textContent = "Camera Enabled";
+        return true;
       }
 
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: true
+          video: {
+            facingMode: "user",
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          },
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true
+          }
         });
         video.srcObject = stream;
         cameraStatus.textContent = "Camera and mic ready.";
+        startBtn.disabled = false;
+        enableCamBtn.textContent = "Camera Enabled";
+        return true;
       } catch (error) {
-        cameraStatus.textContent = "Camera/mic access blocked. Allow permissions to record.";
+        cameraStatus.textContent = "Permission denied or camera unavailable.";
         startBtn.disabled = true;
+        return false;
       }
+    }
+
+    function stopLivePreviewStream() {
+      if (!stream) {
+        return;
+      }
+      stream.getTracks().forEach((track) => track.stop());
+      stream = null;
+      video.srcObject = null;
+      startBtn.disabled = true;
+      enableCamBtn.textContent = "Enable Camera";
     }
 
     function randomPrompt() {
@@ -935,7 +1000,7 @@
     }
 
     function startChallenge() {
-      if (!stream) {
+      if (!stream || !stream.active) {
         prompt.textContent = "Enable camera and mic first.";
         return;
       }
@@ -979,6 +1044,8 @@
       } else {
         stopOverlayRenderLoop();
         stopRecorderStreamTracks();
+        stopLivePreviewStream();
+        cameraStatus.textContent = "Camera stopped.";
         resetUIAfterChallenge();
       }
     }
@@ -986,6 +1053,7 @@
     function stopRecorderStreamTracks() {
       if (!recorderStream || !recorderOwnsTracks) {
         recorderStream = null;
+        recorderOwnsTracks = false;
         return;
       }
       recorderStream.getTracks().forEach((track) => {
@@ -998,6 +1066,8 @@
     function finishRecording() {
       stopOverlayRenderLoop();
       stopRecorderStreamTracks();
+      stopLivePreviewStream();
+      cameraStatus.textContent = "Camera stopped. Click Enable Camera for next run.";
 
       prompt.textContent = "MISSION COMPLETE";
       phase.textContent = "Challenge finished.";
@@ -1025,6 +1095,7 @@
       if (brandTag) {
         brandTag.textContent = BRAND_TAG;
       }
+      startBtn.disabled = !stream;
       startBtn.style.display = "inline-block";
       endBtn.style.display = "none";
     }
@@ -1042,12 +1113,43 @@
 
     revealObserver.observe(slides);
 
+    enableCamBtn.addEventListener("click", requestCameraAccess);
     startBtn.addEventListener("click", startChallenge);
     endBtn.addEventListener("click", endChallenge);
     if (brandTag) {
       brandTag.textContent = BRAND_TAG;
     }
-    initCamera();
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) {
+        return;
+      }
+
+      if (recorder && recorder.state === "recording") {
+        endChallenge();
+        return;
+      }
+
+      stopOverlayRenderLoop();
+      stopRecorderStreamTracks();
+      stopLivePreviewStream();
+      cameraStatus.textContent = "Camera auto-disabled when tab is hidden.";
+    });
+
+    window.addEventListener("pagehide", () => {
+      stopOverlayRenderLoop();
+      stopRecorderStreamTracks();
+      stopLivePreviewStream();
+    });
+
+    if (!isSecureEnvironment()) {
+      cameraStatus.textContent = "Use HTTPS (or localhost) before enabling camera.";
+      enableCamBtn.disabled = true;
+      startBtn.disabled = true;
+    } else if (window.self !== window.top) {
+      cameraStatus.textContent = "Camera disabled inside embedded frame.";
+      enableCamBtn.disabled = true;
+      startBtn.disabled = true;
+    }
   </script>
 </body>
 </html>
