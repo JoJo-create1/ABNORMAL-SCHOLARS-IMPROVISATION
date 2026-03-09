@@ -516,6 +516,7 @@
     const jumpBtn = document.getElementById("jumpBtn");
     const slides = document.getElementById("slides");
     const cameraStatus = document.getElementById("cameraStatus");
+    const videoContainer = document.querySelector(".video-container");
     jumpBtn.addEventListener("click", () => {
       slides.classList.add("active");
       slides.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -543,6 +544,13 @@
 
     function randomPrompt() {
       return prompts[Math.floor(Math.random() * prompts.length)];
+    }
+
+    function focusPromptArea() {
+      if (!videoContainer) {
+        return;
+      }
+      videoContainer.scrollIntoView({ behavior: "smooth", block: "center" });
     }
 
     function startThinkPhase() {
@@ -618,6 +626,7 @@
       recorder.onstop = finishRecording;
       recorder.start();
       rec.style.display = "block";
+      focusPromptArea();
       nextRound();
     }
 
