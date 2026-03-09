@@ -266,6 +266,13 @@
       font-size: clamp(0.7rem, 1.9vw, 0.82rem);
       line-height: 1.35;
       backdrop-filter: blur(4px);
+      transition: background-color 0.28s ease, border-color 0.28s ease, color 0.28s ease, opacity 0.28s ease;
+    }
+
+    .video-container.speak-mode .panel {
+      background: rgba(3, 6, 17, 0.24);
+      border-color: rgba(69, 246, 179, 0.26);
+      opacity: 0.72;
     }
 
     .prompt {
@@ -293,6 +300,17 @@
       min-width: 58px;
       text-align: center;
       font-weight: 800;
+    }
+
+    .brand-tag {
+      left: 0.7rem;
+      bottom: 0.7rem;
+      color: #b0fff0;
+      border-color: rgba(65, 198, 255, 0.58);
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-size: 0.67rem;
     }
 
     .challenge-meta {
@@ -394,6 +412,11 @@
       .timer {
         top: 0.6rem;
       }
+
+      .brand-tag {
+        bottom: auto;
+        top: 2.8rem;
+      }
     }
   </style>
 </head>
@@ -451,6 +474,7 @@
         <div class="panel prompt" id="prompt">Press START CHALLENGE to begin.</div>
         <div class="panel round" id="round">Round 0</div>
         <div class="panel timer" id="timer">--</div>
+        <div class="panel brand-tag" id="brandTag">ABNORMAL SCHOLARS</div>
       </div>
 
       <div class="challenge-meta">
@@ -498,11 +522,18 @@
     const THINK_TIME = 10;
     const SPEAK_TIME = 30;
     const TOTAL_ROUNDS = 3;
+    const BRAND_TAG = "ABNORMAL SCHOLARS";
 
     let round = 0;
     let timerInterval;
     let stream;
     let recorder;
+    let recorderStream;
+    let recorderOwnsTracks = false;
+    let overlayCanvas;
+    let overlayCtx;
+    let overlayRafId;
+    let overlayMode = "think";
     let chunks = [];
 
     const video = document.getElementById("video");
@@ -517,10 +548,24 @@
     const slides = document.getElementById("slides");
     const cameraStatus = document.getElementById("cameraStatus");
     const videoContainer = document.querySelector(".video-container");
+    const brandTag = document.getElementById("brandTag");
+
     jumpBtn.addEventListener("click", () => {
       slides.classList.add("active");
       slides.scrollIntoView({ behavior: "smooth", block: "start" });
     });
+
+    function setOverlayMode(mode) {
+      overlayMode = mode;
+      if (!videoContainer) {
+        return;
+      }
+      if (mode === "speak") {
+        videoContainer.classList.add("speak-mode");
+      } else {
+        videoContainer.classList.remove("speak-mode");
+      }
+    }
 
     async function initCamera() {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -553,7 +598,297 @@
       videoContainer.scrollIntoView({ behavior: "smooth", block: "center" });
     }
 
+    function getComposerSize() {
+      const width = video.videoWidth || 1280;
+      const height = video.videoHeight || 720;
+      return { width, height };
+    }
+
+    function roundedRectPath(ctx, x, y, width, height, radius) {
+      const r = Math.min(radius, width * 0.5, height * 0.5);
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + width, y, x + width, y + height, r);
+      ctx.arcTo(x + width, y + height, x, y + height, r);
+      ctx.arcTo(x, y + height, x, y, r);
+      ctx.arcTo(x, y, x + width, y, r);
+      ctx.closePath();
+    }
+
+    function wrapLines(ctx, text, maxWidth) {
+      const words = text.trim().split(/\s+/);
+      const lines = [];
+      let line = "";
+
+      words.forEach((word) => {
+        const candidate = line ? line + " " + word : word;
+        if (ctx.measureText(candidate).width <= maxWidth) {
+          line = candidate;
+        } else {
+          if (line) {
+            lines.push(line);
+          }
+          line = word;
+        }
+      });
+
+      if (line) {
+        lines.push(line);
+      }
+
+      return lines.length ? lines : [""];
+    }
+
+    function drawPanel(ctx, config) {
+      const {
+        x, y, width, height, radius,
+        fillAlpha, borderAlpha, borderColor,
+        text, font, textColor, textAlpha,
+        align = "left", paddingX = 14, paddingY = 12, lineHeight = 24
+      } = config;
+
+      roundedRectPath(ctx, x, y, width, height, radius);
+      ctx.fillStyle = "rgba(3, 6, 17, " + fillAlpha + ")";
+      ctx.fill();
+      ctx.strokeStyle = borderColor.replace("ALPHA", borderAlpha.toString());
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.font = font;
+      ctx.fillStyle = textColor.replace("ALPHA", textAlpha.toString());
+      ctx.textAlign = align;
+      ctx.textBaseline = "middle";
+
+      const lines = Array.isArray(text) ? text : [text];
+      const textBaseX = align === "center" ? x + width / 2 : x + paddingX;
+      const firstLineY = y + paddingY + lineHeight / 2;
+      lines.forEach((line, index) => {
+        ctx.fillText(line, textBaseX, firstLineY + lineHeight * index);
+      });
+    }
+
+    function drawOverlayFrame() {
+      if (!overlayCtx || !overlayCanvas) {
+        return;
+      }
+
+      const width = overlayCanvas.width;
+      const height = overlayCanvas.height;
+      if (width === 0 || height === 0) {
+        return;
+      }
+
+      if (video.readyState >= 2) {
+        overlayCtx.drawImage(video, 0, 0, width, height);
+      } else {
+        overlayCtx.fillStyle = "#070b18";
+        overlayCtx.fillRect(0, 0, width, height);
+      }
+
+      const isSpeak = overlayMode === "speak";
+      const fillAlpha = isSpeak ? 0.22 : 0.84;
+      const borderAlpha = isSpeak ? 0.28 : 0.6;
+      const textAlpha = isSpeak ? 0.7 : 1;
+      const panelTop = Math.max(12, Math.round(height * 0.035));
+
+      const infoFontSize = Math.max(16, Math.round(width * 0.022));
+      const infoFont = "700 " + infoFontSize + "px Manrope, sans-serif";
+      const infoLineHeight = Math.round(infoFontSize * 1.2);
+      const timerText = timer.textContent || "--";
+      const roundText = roundUI.textContent || "Round 0";
+
+      overlayCtx.font = infoFont;
+      const roundWidth = Math.max(140, Math.round(overlayCtx.measureText(roundText).width + 34));
+      const timerWidth = Math.max(92, Math.round(overlayCtx.measureText(timerText).width + 34));
+      const infoHeight = infoLineHeight + 20;
+
+      drawPanel(overlayCtx, {
+        x: 16,
+        y: panelTop,
+        width: roundWidth,
+        height: infoHeight,
+        radius: 12,
+        fillAlpha,
+        borderAlpha,
+        borderColor: "rgba(65, 198, 255, ALPHA)",
+        text: roundText,
+        font: infoFont,
+        textColor: "rgba(214, 255, 240, ALPHA)",
+        textAlpha,
+        align: "left",
+        paddingX: 16,
+        paddingY: 10,
+        lineHeight: infoLineHeight
+      });
+
+      drawPanel(overlayCtx, {
+        x: width - timerWidth - 16,
+        y: panelTop,
+        width: timerWidth,
+        height: infoHeight,
+        radius: 12,
+        fillAlpha,
+        borderAlpha,
+        borderColor: "rgba(69, 246, 179, ALPHA)",
+        text: timerText,
+        font: infoFont,
+        textColor: "rgba(162, 255, 218, ALPHA)",
+        textAlpha,
+        align: "center",
+        paddingY: 10,
+        lineHeight: infoLineHeight
+      });
+
+      const promptFontSize = Math.max(16, Math.round(width * 0.023));
+      const promptFont = "700 " + promptFontSize + "px Manrope, sans-serif";
+      const promptLineHeight = Math.round(promptFontSize * 1.28);
+      const promptWidth = Math.min(Math.round(width * 0.86), 920);
+      const promptX = (width - promptWidth) / 2;
+      const promptText = prompt.textContent || "";
+
+      overlayCtx.font = promptFont;
+      const promptLines = wrapLines(overlayCtx, promptText, promptWidth - 32);
+      const promptHeight = promptLines.length * promptLineHeight + 24;
+      const promptY = panelTop + infoHeight + 12;
+
+      drawPanel(overlayCtx, {
+        x: promptX,
+        y: promptY,
+        width: promptWidth,
+        height: promptHeight,
+        radius: 12,
+        fillAlpha,
+        borderAlpha,
+        borderColor: "rgba(69, 246, 179, ALPHA)",
+        text: promptLines,
+        font: promptFont,
+        textColor: "rgba(212, 255, 231, ALPHA)",
+        textAlpha,
+        align: "center",
+        paddingY: 12,
+        lineHeight: promptLineHeight
+      });
+
+      const phaseFontSize = Math.max(14, Math.round(width * 0.018));
+      const phaseFont = "700 " + phaseFontSize + "px Manrope, sans-serif";
+      const phaseLineHeight = Math.round(phaseFontSize * 1.2);
+      const phaseText = phase.textContent || "";
+      overlayCtx.font = phaseFont;
+      const phaseWidth = Math.max(160, Math.round(overlayCtx.measureText(phaseText).width + 34));
+      const phaseHeight = phaseLineHeight + 20;
+      const phaseY = height - phaseHeight - 16;
+
+      drawPanel(overlayCtx, {
+        x: (width - phaseWidth) / 2,
+        y: phaseY,
+        width: phaseWidth,
+        height: phaseHeight,
+        radius: 12,
+        fillAlpha: isSpeak ? 0.16 : 0.7,
+        borderAlpha: isSpeak ? 0.24 : 0.48,
+        borderColor: "rgba(120, 145, 200, ALPHA)",
+        text: phaseText,
+        font: phaseFont,
+        textColor: "rgba(210, 220, 245, ALPHA)",
+        textAlpha: isSpeak ? 0.65 : 0.9,
+        align: "center",
+        paddingY: 10,
+        lineHeight: phaseLineHeight
+      });
+
+      const brandFontSize = Math.max(12, Math.round(width * 0.014));
+      const brandFont = "800 " + brandFontSize + "px Manrope, sans-serif";
+      const brandLineHeight = Math.round(brandFontSize * 1.15);
+      overlayCtx.font = brandFont;
+      const brandWidth = Math.max(180, Math.round(overlayCtx.measureText(BRAND_TAG).width + 28));
+      const brandHeight = brandLineHeight + 16;
+
+      drawPanel(overlayCtx, {
+        x: 16,
+        y: height - brandHeight - 16,
+        width: brandWidth,
+        height: brandHeight,
+        radius: 12,
+        fillAlpha: isSpeak ? 0.15 : 0.65,
+        borderAlpha: isSpeak ? 0.24 : 0.5,
+        borderColor: "rgba(65, 198, 255, ALPHA)",
+        text: BRAND_TAG,
+        font: brandFont,
+        textColor: "rgba(176, 255, 240, ALPHA)",
+        textAlpha: isSpeak ? 0.7 : 0.95,
+        align: "left",
+        paddingX: 14,
+        paddingY: 8,
+        lineHeight: brandLineHeight
+      });
+    }
+
+    function startOverlayRenderLoop() {
+      if (overlayRafId) {
+        cancelAnimationFrame(overlayRafId);
+      }
+
+      const loop = () => {
+        drawOverlayFrame();
+        overlayRafId = requestAnimationFrame(loop);
+      };
+
+      loop();
+    }
+
+    function stopOverlayRenderLoop() {
+      if (overlayRafId) {
+        cancelAnimationFrame(overlayRafId);
+        overlayRafId = null;
+      }
+    }
+
+    function createRecorderStream() {
+      recorderOwnsTracks = false;
+      const { width, height } = getComposerSize();
+
+      if (!overlayCanvas) {
+        overlayCanvas = document.createElement("canvas");
+      }
+
+      overlayCanvas.width = width;
+      overlayCanvas.height = height;
+      overlayCtx = overlayCanvas.getContext("2d");
+
+      if (!overlayCtx) {
+        return stream;
+      }
+
+      startOverlayRenderLoop();
+      const canvasStream = overlayCanvas.captureStream(30);
+      const composed = new MediaStream();
+
+      canvasStream.getVideoTracks().forEach((track) => composed.addTrack(track));
+      stream.getAudioTracks().forEach((track) => composed.addTrack(track.clone()));
+      recorderOwnsTracks = true;
+      return composed;
+    }
+
+    function getRecorderOptions() {
+      if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) {
+        return {};
+      }
+
+      if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")) {
+        return { mimeType: "video/webm;codecs=vp9,opus" };
+      }
+      if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")) {
+        return { mimeType: "video/webm;codecs=vp8,opus" };
+      }
+      if (MediaRecorder.isTypeSupported("video/webm")) {
+        return { mimeType: "video/webm" };
+      }
+
+      return {};
+    }
+
     function startThinkPhase() {
+      setOverlayMode("think");
       phase.textContent = "THINK";
       let time = THINK_TIME;
       timer.textContent = time;
@@ -570,6 +905,7 @@
     }
 
     function startSpeakPhase() {
+      setOverlayMode("speak");
       phase.textContent = "SPEAK";
       let time = SPEAK_TIME;
       timer.textContent = time;
@@ -608,12 +944,15 @@
       startBtn.style.display = "none";
       endBtn.style.display = "inline-block";
 
+      recorderStream = createRecorderStream();
       try {
-        recorder = new MediaRecorder(stream);
+        recorder = new MediaRecorder(recorderStream, getRecorderOptions());
       } catch (error) {
         prompt.textContent = "Recording is not supported on this browser.";
         startBtn.style.display = "inline-block";
         endBtn.style.display = "none";
+        stopOverlayRenderLoop();
+        stopRecorderStreamTracks();
         return;
       }
 
@@ -633,15 +972,33 @@
     function endChallenge() {
       clearInterval(timerInterval);
       rec.style.display = "none";
+      setOverlayMode("think");
 
       if (recorder && recorder.state === "recording") {
         recorder.stop();
       } else {
+        stopOverlayRenderLoop();
+        stopRecorderStreamTracks();
         resetUIAfterChallenge();
       }
     }
 
+    function stopRecorderStreamTracks() {
+      if (!recorderStream || !recorderOwnsTracks) {
+        recorderStream = null;
+        return;
+      }
+      recorderStream.getTracks().forEach((track) => {
+        track.stop();
+      });
+      recorderStream = null;
+      recorderOwnsTracks = false;
+    }
+
     function finishRecording() {
+      stopOverlayRenderLoop();
+      stopRecorderStreamTracks();
+
       prompt.textContent = "MISSION COMPLETE";
       phase.textContent = "Challenge finished.";
       timer.textContent = "--";
@@ -664,6 +1021,10 @@
     function resetUIAfterChallenge() {
       round = 0;
       roundUI.textContent = "Round 0";
+      timer.textContent = "--";
+      if (brandTag) {
+        brandTag.textContent = BRAND_TAG;
+      }
       startBtn.style.display = "inline-block";
       endBtn.style.display = "none";
     }
@@ -683,6 +1044,9 @@
 
     startBtn.addEventListener("click", startChallenge);
     endBtn.addEventListener("click", endChallenge);
+    if (brandTag) {
+      brandTag.textContent = BRAND_TAG;
+    }
     initCamera();
   </script>
 </body>
