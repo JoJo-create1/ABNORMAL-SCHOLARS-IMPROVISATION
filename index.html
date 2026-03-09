@@ -1053,37 +1053,42 @@
       return composed;
     }
 
-    function getRecorderOptions() {
-      if (!window.MediaRecorder) {
-        return {};
+    function getRecorderMimeCandidates() {
+      if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) {
+        return [];
       }
 
-      if (!MediaRecorder.isTypeSupported) {
-        return {};
-      }
+      const preferred = IS_IOS
+        ? [
+            "video/mp4;codecs=h264,aac",
+            "video/mp4",
+            "video/webm;codecs=vp8,opus",
+            "video/webm"
+          ]
+        : [
+            "video/webm;codecs=vp8,opus",
+            "video/webm",
+            "video/mp4;codecs=h264,aac",
+            "video/mp4"
+          ];
 
-      const candidates = [
-        "video/mp4;codecs=h264,aac",
-        "video/mp4",
-        "video/webm;codecs=vp9,opus",
-        "video/webm;codecs=vp8,opus",
-        "video/webm"
-      ];
-
-      for (const candidate of candidates) {
-        if (MediaRecorder.isTypeSupported(candidate)) {
-          return { mimeType: candidate };
-        }
-      }
-
-      return {};
+      return preferred.filter((candidate) => MediaRecorder.isTypeSupported(candidate));
     }
 
     function createMediaRecorder(sourceStream) {
-      const options = getRecorderOptions();
-      if (options.mimeType) {
-        return new MediaRecorder(sourceStream, options);
+      if (!window.MediaRecorder) {
+        throw new Error("MediaRecorder is not available.");
       }
+
+      const candidates = getRecorderMimeCandidates();
+      for (const mimeType of candidates) {
+        try {
+          return new MediaRecorder(sourceStream, { mimeType });
+        } catch (error) {
+          // Try the next MIME candidate.
+        }
+      }
+
       return new MediaRecorder(sourceStream);
     }
 
