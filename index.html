@@ -552,7 +552,7 @@
     const IS_IOS = IOS_REGEX.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
     const IS_ANDROID = /Android/i.test(navigator.userAgent);
     const PREFERS_REDUCED_MOTION = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const SHOULD_USE_LIGHTWEIGHT_RECORDING = IS_IOS || PREFERS_REDUCED_MOTION;
+    const SHOULD_USE_LIGHTWEIGHT_RECORDING = IS_IOS || IS_ANDROID || PREFERS_REDUCED_MOTION;
     const OVERLAY_RENDER_FPS = SHOULD_USE_LIGHTWEIGHT_RECORDING ? 10 : 24;
     const COMPOSITE_CAPTURE_FPS = SHOULD_USE_LIGHTWEIGHT_RECORDING ? 12 : 24;
 
