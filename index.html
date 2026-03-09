@@ -561,6 +561,7 @@
     const IS_ANDROID = /Android/i.test(navigator.userAgent);
     const PREFERS_REDUCED_MOTION = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const SHOULD_USE_LIGHTWEIGHT_RECORDING = IS_IOS || IS_ANDROID || PREFERS_REDUCED_MOTION;
+    const SHOULD_EMBED_OVERLAY_IN_RECORDING = !PREFERS_REDUCED_MOTION;
     const OVERLAY_RENDER_FPS = SHOULD_USE_LIGHTWEIGHT_RECORDING ? 10 : 24;
     const COMPOSITE_CAPTURE_FPS = SHOULD_USE_LIGHTWEIGHT_RECORDING ? 12 : 24;
 
@@ -570,6 +571,7 @@
     let recorder;
     let recorderStream;
     let recorderOwnsTracks = false;
+    let isComposedRecording = false;
     let overlayCanvas;
     let overlayCtx;
     let overlayRafId;
@@ -627,7 +629,7 @@
     }
 
     function canUseCanvasCapture() {
-      if (SHOULD_USE_LIGHTWEIGHT_RECORDING) {
+      if (!SHOULD_EMBED_OVERLAY_IN_RECORDING) {
         return false;
       }
       return typeof HTMLCanvasElement !== "undefined"
@@ -1050,6 +1052,7 @@
 
     function createRecorderStream() {
       recorderOwnsTracks = false;
+      isComposedRecording = false;
       if (!stream) {
         return null;
       }
@@ -1089,6 +1092,7 @@
       canvasStream.getVideoTracks().forEach((track) => composed.addTrack(track));
       stream.getAudioTracks().forEach((track) => composed.addTrack(track.clone()));
       recorderOwnsTracks = true;
+      isComposedRecording = true;
       return composed;
     }
 
@@ -1296,7 +1300,8 @@
           try {
             recorder = createMediaRecorder(recorderStream);
             recorderMimeType = recorder.mimeType || "";
-            cameraStatus.textContent = "Using basic recording mode for this device.";
+            isComposedRecording = false;
+            cameraStatus.textContent = "Using basic recording mode. Downloaded video may miss overlay.";
           } catch (fallbackError) {
             challengeActive = false;
             isStoppingRecorder = false;
@@ -1350,7 +1355,8 @@
           try {
             recorder = createMediaRecorder(recorderStream);
             recorderMimeType = recorder.mimeType || recorderMimeType;
-            cameraStatus.textContent = "Switched to basic recording mode.";
+            isComposedRecording = false;
+            cameraStatus.textContent = "Switched to basic mode. Downloaded video may miss overlay.";
           } catch (fallbackError) {
             cameraStatus.textContent = "Recorder interrupted and could not restart.";
             endChallenge();
@@ -1432,6 +1438,10 @@
 
         if (!IS_IOS && !IS_ANDROID && downloadLink) {
           downloadLink.click();
+        }
+
+        if (!isComposedRecording) {
+          cameraStatus.textContent = "Downloaded video may miss overlay on this browser/device.";
         } else if (IS_ANDROID && extension !== "mp4") {
           cameraStatus.textContent = "Saved as WEBM. If WhatsApp rejects it, send as document or use latest Chrome.";
         } else if (downloadLink) {
