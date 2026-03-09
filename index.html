@@ -549,6 +549,9 @@
     let overlayCtx;
     let overlayRafId;
     let overlayMode = "think";
+    let phaseToken = 0;
+    let challengeActive = false;
+    let isStoppingRecorder = false;
     let chunks = [];
 
     const video = document.getElementById("video");
@@ -953,40 +956,74 @@
     }
 
     function startThinkPhase() {
+      if (!challengeActive) {
+        return;
+      }
+      clearInterval(timerInterval);
+      phaseToken += 1;
+      const currentPhaseToken = phaseToken;
+
       setOverlayMode("think");
       phase.textContent = "THINK";
       let time = THINK_TIME;
       timer.textContent = time;
 
       timerInterval = setInterval(() => {
+        if (currentPhaseToken !== phaseToken || !challengeActive) {
+          clearInterval(timerInterval);
+          return;
+        }
+
         time -= 1;
         timer.textContent = time;
 
         if (time <= 0) {
           clearInterval(timerInterval);
+          if (currentPhaseToken !== phaseToken || !challengeActive) {
+            return;
+          }
           startSpeakPhase();
         }
       }, 1000);
     }
 
     function startSpeakPhase() {
+      if (!challengeActive) {
+        return;
+      }
+      clearInterval(timerInterval);
+      phaseToken += 1;
+      const currentPhaseToken = phaseToken;
+
       setOverlayMode("speak");
       phase.textContent = "SPEAK";
       let time = SPEAK_TIME;
       timer.textContent = time;
 
       timerInterval = setInterval(() => {
+        if (currentPhaseToken !== phaseToken || !challengeActive) {
+          clearInterval(timerInterval);
+          return;
+        }
+
         time -= 1;
         timer.textContent = time;
 
         if (time <= 0) {
           clearInterval(timerInterval);
+          if (currentPhaseToken !== phaseToken || !challengeActive) {
+            return;
+          }
           nextRound();
         }
       }, 1000);
     }
 
     function nextRound() {
+      if (!challengeActive) {
+        return;
+      }
+
       round += 1;
 
       if (round > TOTAL_ROUNDS) {
@@ -1000,11 +1037,19 @@
     }
 
     function startChallenge() {
+      if (challengeActive) {
+        return;
+      }
+
       if (!stream || !stream.active) {
         prompt.textContent = "Enable camera and mic first.";
         return;
       }
 
+      challengeActive = true;
+      isStoppingRecorder = false;
+      phaseToken += 1;
+      round = 0;
       chunks = [];
       startBtn.style.display = "none";
       endBtn.style.display = "inline-block";
@@ -1013,7 +1058,10 @@
       try {
         recorder = new MediaRecorder(recorderStream, getRecorderOptions());
       } catch (error) {
+        challengeActive = false;
+        isStoppingRecorder = false;
         prompt.textContent = "Recording is not supported on this browser.";
+        startBtn.disabled = !stream;
         startBtn.style.display = "inline-block";
         endBtn.style.display = "none";
         stopOverlayRenderLoop();
@@ -1027,25 +1075,57 @@
         }
       };
 
-      recorder.onstop = finishRecording;
+      recorder.onstop = handleRecorderStop;
       recorder.start();
       rec.style.display = "block";
       focusPromptArea();
       nextRound();
     }
 
+    function startRecorderAgain() {
+      try {
+        recorder = new MediaRecorder(recorderStream, getRecorderOptions());
+      } catch (error) {
+        cameraStatus.textContent = "Recorder interrupted and could not restart.";
+        endChallenge();
+        return;
+      }
+
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          chunks.push(event.data);
+        }
+      };
+      recorder.onstop = handleRecorderStop;
+      recorder.start();
+    }
+
+    function handleRecorderStop() {
+      if (challengeActive && !isStoppingRecorder) {
+        startRecorderAgain();
+        return;
+      }
+      finishRecording();
+    }
+
     function endChallenge() {
+      const wasActive = challengeActive;
+      challengeActive = false;
+      phaseToken += 1;
       clearInterval(timerInterval);
       rec.style.display = "none";
       setOverlayMode("think");
 
       if (recorder && recorder.state === "recording") {
+        isStoppingRecorder = true;
         recorder.stop();
       } else {
         stopOverlayRenderLoop();
         stopRecorderStreamTracks();
-        stopLivePreviewStream();
-        cameraStatus.textContent = "Camera stopped.";
+        if (wasActive) {
+          stopLivePreviewStream();
+          cameraStatus.textContent = "Camera stopped.";
+        }
         resetUIAfterChallenge();
       }
     }
@@ -1064,6 +1144,7 @@
     }
 
     function finishRecording() {
+      isStoppingRecorder = false;
       stopOverlayRenderLoop();
       stopRecorderStreamTracks();
       stopLivePreviewStream();
