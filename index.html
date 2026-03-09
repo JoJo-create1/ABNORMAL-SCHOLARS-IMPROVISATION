@@ -550,6 +550,7 @@
     const BRAND_TAG = "ABNORMAL SCHOLARS";
     const IOS_REGEX = /iPad|iPhone|iPod/;
     const IS_IOS = IOS_REGEX.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    const IS_ANDROID = /Android/i.test(navigator.userAgent);
     const PREFERS_REDUCED_MOTION = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const SHOULD_USE_LIGHTWEIGHT_RECORDING = IS_IOS || PREFERS_REDUCED_MOTION;
     const OVERLAY_RENDER_FPS = SHOULD_USE_LIGHTWEIGHT_RECORDING ? 10 : 24;
@@ -568,6 +569,8 @@
     let phaseToken = 0;
     let challengeActive = false;
     let isStoppingRecorder = false;
+    let isRequestingCamera = false;
+    let lastCameraRequestAt = 0;
     let chunks = [];
     let recorderMimeType = "";
     let overlayLastDrawTime = 0;
@@ -636,6 +639,17 @@
       }
     }
 
+    function hasLiveMediaStream(candidateStream) {
+      if (!candidateStream) {
+        return false;
+      }
+      if (typeof candidateStream.active === "boolean" && candidateStream.active) {
+        return true;
+      }
+      const tracks = candidateStream.getTracks ? candidateStream.getTracks() : [];
+      return tracks.some((track) => track.readyState === "live");
+    }
+
     async function requestCameraAccess() {
       if (window.self !== window.top) {
         cameraStatus.textContent = "Camera disabled inside embedded frame.";
@@ -656,31 +670,46 @@
         return false;
       }
 
-      if (stream && stream.active) {
+      if (hasLiveMediaStream(stream)) {
         cameraStatus.textContent = "Camera and mic ready.";
         startBtn.disabled = false;
         enableCamBtn.textContent = "Camera Enabled";
         return true;
       }
 
+      if (stream && !hasLiveMediaStream(stream)) {
+        stopLivePreviewStream();
+      }
+
+      isRequestingCamera = true;
+      lastCameraRequestAt = Date.now();
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: getCameraConstraints(),
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          }
-        });
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: getCameraConstraints(),
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            }
+          });
+          cameraStatus.textContent = "Camera and mic ready.";
+        } catch (primaryError) {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: getCameraConstraints(),
+            audio: false
+          });
+          cameraStatus.textContent = "Camera ready. Microphone unavailable on this browser.";
+        }
+
         video.srcObject = stream;
         video.play().catch(() => {});
-        cameraStatus.textContent = "Camera and mic ready.";
-        startBtn.disabled = false;
+        startBtn.disabled = !hasLiveMediaStream(stream);
         enableCamBtn.textContent = "Camera Enabled";
-        return true;
+        return hasLiveMediaStream(stream);
       } catch (error) {
         if (error && error.name === "NotAllowedError") {
-          cameraStatus.textContent = "Permission denied. On iPhone, open this link in Safari and allow camera + mic.";
+          cameraStatus.textContent = "Permission denied. Allow camera/mic and reopen in Chrome or Safari.";
         } else if (error && error.name === "NotFoundError") {
           cameraStatus.textContent = "Camera or microphone not found on this device.";
         } else if (isLikelyInAppBrowser()) {
@@ -690,6 +719,8 @@
         }
         startBtn.disabled = true;
         return false;
+      } finally {
+        isRequestingCamera = false;
       }
     }
 
@@ -1173,14 +1204,17 @@
       startThinkPhase();
     }
 
-    function startChallenge() {
+    async function startChallenge() {
       if (challengeActive) {
         return;
       }
 
-      if (!stream || !stream.active) {
-        prompt.textContent = "Enable camera and mic first.";
-        return;
+      if (!hasLiveMediaStream(stream)) {
+        const cameraReady = await requestCameraAccess();
+        if (!cameraReady || !hasLiveMediaStream(stream)) {
+          prompt.textContent = "Enable camera and mic first.";
+          return;
+        }
       }
 
       challengeActive = true;
@@ -1201,15 +1235,40 @@
         recorder = createMediaRecorder(recorderStream);
         recorderMimeType = recorder.mimeType || "";
       } catch (error) {
-        challengeActive = false;
-        isStoppingRecorder = false;
-        prompt.textContent = "Recording is not supported on this browser.";
-        startBtn.disabled = !stream;
-        startBtn.style.display = "inline-block";
-        endBtn.style.display = "none";
-        stopOverlayRenderLoop();
-        stopRecorderStreamTracks();
-        return;
+        if (stream && recorderStream !== stream) {
+          stopOverlayRenderLoop();
+          stopRecorderStreamTracks();
+          recorderStream = stream;
+          recorderOwnsTracks = false;
+
+          try {
+            recorder = createMediaRecorder(recorderStream);
+            recorderMimeType = recorder.mimeType || "";
+            cameraStatus.textContent = "Using basic recording mode for this device.";
+          } catch (fallbackError) {
+            challengeActive = false;
+            isStoppingRecorder = false;
+            prompt.textContent = "Recording is not supported on this browser.";
+            cameraStatus.textContent = "Could not start recorder on this Android browser. Try Chrome or Samsung Internet.";
+            startBtn.disabled = !hasLiveMediaStream(stream);
+            startBtn.style.display = "inline-block";
+            endBtn.style.display = "none";
+            stopOverlayRenderLoop();
+            stopRecorderStreamTracks();
+            return;
+          }
+        } else {
+          challengeActive = false;
+          isStoppingRecorder = false;
+          prompt.textContent = "Recording is not supported on this browser.";
+          cameraStatus.textContent = "Could not start recorder on this Android browser. Try Chrome or Samsung Internet.";
+          startBtn.disabled = !hasLiveMediaStream(stream);
+          startBtn.style.display = "inline-block";
+          endBtn.style.display = "none";
+          stopOverlayRenderLoop();
+          stopRecorderStreamTracks();
+          return;
+        }
       }
 
       recorder.ondataavailable = (event) => {
@@ -1219,7 +1278,13 @@
       };
 
       recorder.onstop = handleRecorderStop;
-      recorder.start(1000);
+      try {
+        recorder.start(1000);
+      } catch (error) {
+        cameraStatus.textContent = "Recorder failed to start on this device.";
+        endChallenge();
+        return;
+      }
       rec.style.display = "block";
       focusPromptArea();
       nextRound();
@@ -1233,9 +1298,25 @@
         recorder = createMediaRecorder(recorderStream);
         recorderMimeType = recorder.mimeType || recorderMimeType;
       } catch (error) {
-        cameraStatus.textContent = "Recorder interrupted and could not restart.";
-        endChallenge();
-        return;
+        if (stream && recorderStream !== stream) {
+          stopOverlayRenderLoop();
+          stopRecorderStreamTracks();
+          recorderStream = stream;
+          recorderOwnsTracks = false;
+          try {
+            recorder = createMediaRecorder(recorderStream);
+            recorderMimeType = recorder.mimeType || recorderMimeType;
+            cameraStatus.textContent = "Switched to basic recording mode.";
+          } catch (fallbackError) {
+            cameraStatus.textContent = "Recorder interrupted and could not restart.";
+            endChallenge();
+            return;
+          }
+        } else {
+          cameraStatus.textContent = "Recorder interrupted and could not restart.";
+          endChallenge();
+          return;
+        }
       }
 
       recorder.ondataavailable = (event) => {
@@ -1244,7 +1325,13 @@
         }
       };
       recorder.onstop = handleRecorderStop;
-      recorder.start(1000);
+      try {
+        recorder.start(1000);
+      } catch (error) {
+        cameraStatus.textContent = "Recorder interrupted and could not restart.";
+        endChallenge();
+        return;
+      }
     }
 
     function handleRecorderStop() {
@@ -1306,7 +1393,7 @@
         const blob = new Blob(chunks, { type: mimeType });
         exposeDownloadLink(blob, extension);
 
-        if (!IS_IOS && downloadLink) {
+        if (!IS_IOS && !IS_ANDROID && downloadLink) {
           downloadLink.click();
         } else if (downloadLink) {
           cameraStatus.textContent = "Recording ready. Tap the download link below to save it.";
@@ -1323,7 +1410,7 @@
       if (brandTag) {
         brandTag.textContent = BRAND_TAG;
       }
-      startBtn.disabled = !stream;
+      startBtn.disabled = !hasLiveMediaStream(stream);
       startBtn.style.display = "inline-block";
       endBtn.style.display = "none";
     }
@@ -1352,8 +1439,17 @@
         return;
       }
 
+      const permissionPromptWindowMs = 4000;
+      if (isRequestingCamera || (Date.now() - lastCameraRequestAt) < permissionPromptWindowMs) {
+        return;
+      }
+
       if (recorder && recorder.state === "recording") {
         endChallenge();
+        return;
+      }
+
+      if (!challengeActive) {
         return;
       }
 
