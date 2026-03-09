@@ -280,9 +280,9 @@
     }
 
     .video-container.speak-mode .panel {
-      background: rgba(3, 6, 17, 0.24);
-      border-color: rgba(69, 246, 179, 0.26);
-      opacity: 0.72;
+      background: rgba(3, 6, 17, 0.66);
+      border-color: rgba(69, 246, 179, 0.56);
+      opacity: 0.98;
     }
 
     .prompt {
@@ -1097,29 +1097,30 @@
         return [];
       }
 
-      const preferred = IS_IOS
-        ? [
-            "video/mp4;codecs=h264,aac",
-            "video/mp4",
-            "video/webm;codecs=vp8,opus",
-            "video/webm"
-          ]
-        : [
-            "video/webm;codecs=vp8,opus",
-            "video/webm",
-            "video/mp4;codecs=h264,aac",
-            "video/mp4"
-          ];
+      const mp4Candidates = [
+        "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+        "video/mp4;codecs=avc1,mp4a.40.2",
+        "video/mp4;codecs=h264,aac",
+        "video/mp4"
+      ];
+      const webmCandidates = [
+        "video/webm;codecs=vp9,opus",
+        "video/webm;codecs=vp8,opus",
+        "video/webm"
+      ];
+
+      const preferred = (IS_IOS || IS_ANDROID)
+        ? mp4Candidates.concat(webmCandidates)
+        : webmCandidates.concat(mp4Candidates);
 
       return preferred.filter((candidate) => MediaRecorder.isTypeSupported(candidate));
     }
 
-    function createMediaRecorder(sourceStream) {
+    function createMediaRecorderFromCandidates(sourceStream, candidates) {
       if (!window.MediaRecorder) {
         throw new Error("MediaRecorder is not available.");
       }
 
-      const candidates = getRecorderMimeCandidates();
       for (const mimeType of candidates) {
         try {
           return new MediaRecorder(sourceStream, { mimeType });
@@ -1129,6 +1130,49 @@
       }
 
       return new MediaRecorder(sourceStream);
+    }
+
+    function createMediaRecorder(sourceStream) {
+      return createMediaRecorderFromCandidates(sourceStream, getRecorderMimeCandidates());
+    }
+
+    function isMp4MimeType(mimeType) {
+      return typeof mimeType === "string" && mimeType.toLowerCase().includes("mp4");
+    }
+
+    function getNonMp4MimeCandidates() {
+      return getRecorderMimeCandidates().filter((mimeType) => !isMp4MimeType(mimeType));
+    }
+
+    function attachRecorderHandlers() {
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          chunks.push(event.data);
+        }
+      };
+      recorder.onstop = handleRecorderStop;
+    }
+
+    function startRecorderWithCodecFallback() {
+      try {
+        recorder.start(1000);
+        return true;
+      } catch (error) {
+        if (!recorderStream || !isMp4MimeType(recorderMimeType)) {
+          return false;
+        }
+
+        try {
+          recorder = createMediaRecorderFromCandidates(recorderStream, getNonMp4MimeCandidates());
+          recorderMimeType = recorder.mimeType || recorderMimeType;
+          attachRecorderHandlers();
+          recorder.start(1000);
+          cameraStatus.textContent = "Using WEBM compatibility mode for this device.";
+          return true;
+        } catch (fallbackError) {
+          return false;
+        }
+      }
     }
 
     function startThinkPhase() {
